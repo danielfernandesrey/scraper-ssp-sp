@@ -5,19 +5,10 @@ Created on Tue Apr 17 22:15:23 2018
 @author: daniel
 """
 import re
+import pandas as pd
+import xlrd
 import requests
 from bs4 import BeautifulSoup
-
-
-def get_viewstate(html):
-    soup = BeautifulSoup(html, 'lxml')
-    viewstate = soup.find('input', attrs={'id': '__VIEWSTATE'})
-    viewstate_value = viewstate['value']
-    eventvalidation = soup.find('input', attrs={'id': '__EVENTVALIDATION'})
-    eventvalidation_value = eventvalidation['value']
-
-    return viewstate_value, eventvalidation_value
-
 
 headers = {
     'Origin': 'http://www.ssp.sp.gov.br',
@@ -31,6 +22,15 @@ headers = {
     'Referer': 'http://www.ssp.sp.gov.br/transparenciassp/',
     'Connection': 'keep-alive',
 }
+
+def get_viewstate(html):
+    soup = BeautifulSoup(html, 'lxml')
+    viewstate = soup.find('input', attrs={'id': '__VIEWSTATE'})
+    viewstate_value = viewstate['value']
+    eventvalidation = soup.find('input', attrs={'id': '__EVENTVALIDATION'})
+    eventvalidation_value = eventvalidation['value']
+
+    return viewstate_value, eventvalidation_value
 
 
 def get_html(session, viewstate, event_validation, event_target, outro=None, stream=False, hdfExport=''):
@@ -60,21 +60,30 @@ def download():
     response = session.post(url, headers=headers)
     viewstate, eventvalidation = get_viewstate(response.text)
 
-    parametros = [
+    params = [
         ['ctl00$cphBody$btnRouboCelular'],
         ['ctl00$cphBody$lkAno17', True, False],
         ['ctl00$cphBody$lkMes10', True, False],
         ['ctl00$cphBody$ExportarBOLink', True, True, 0]
     ]
-    for i in range(len(parametros) - 1):
-        response = get_html(session, viewstate, eventvalidation, *parametros[i])
+    for i in range(len(params) - 1):
+        response = get_html(session, viewstate, eventvalidation, *params[i])
         html = response.text
         viewstate, eventvalidation = get_viewstate(html)
-    response = get_html(session, viewstate, eventvalidation, *parametros[-1])
+    response = get_html(session, viewstate, eventvalidation, *params[-1])
     try:
-        nome = re.search('=.*xls', response.headers['content-disposition'])
-        nome = nome.group().replace('=', '')
+        file_name = re.search('=.*xls', response.headers['content-disposition'])
+        file_name = file_name.group().replace('=', '')
     except Exception:
-        nome = "dados.xls"
-    with open(nome, 'wb') as f:
-        f.write(response.content)
+        file_name = "dados.xls"
+
+    ssp_data = response.text.split('\n')
+    corrected_ssp_data = []
+    for dado in ssp_data:
+        dado_corrigido = re.split('\t{1}', dado)
+        corrected_ssp_data.append(dado_corrigido)
+
+    header = corrected_ssp_data[0]
+    corrected_ssp_data = corrected_ssp_data[1:]
+    df = pd.DataFrame(corrected_ssp_data)
+    df.to_excel(file_name, index=False, encoding='utf-8', header=header)
