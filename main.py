@@ -23,7 +23,10 @@ headers = {
     'Connection': 'keep-alive',
 }
 
-def get_viewstate(html):
+def get_viewstate_eventvalidation(html):
+    """
+    Extract __VIEWSTATE and __EVENTVALIDATION
+    """
     soup = BeautifulSoup(html, 'lxml')
     viewstate = soup.find('input', attrs={'id': '__VIEWSTATE'})
     viewstate_value = viewstate['value']
@@ -33,7 +36,10 @@ def get_viewstate(html):
     return viewstate_value, eventvalidation_value
 
 
-def get_html(session, viewstate, event_validation, event_target, outro=None, stream=False, hdfExport=''):
+def get_response(session, viewstate, event_validation, event_target, outro=None, stream=False, hdfExport=''):
+    """
+    Handles all the responses received from every request made to the website.
+    """
     url = "http://www.ssp.sp.gov.br/transparenciassp/"
     data = [
         ('__EVENTTARGET', event_target),
@@ -51,31 +57,50 @@ def get_html(session, viewstate, event_validation, event_target, outro=None, str
     response = session.post(url, headers=headers, data=data, stream=stream)
     return response
 
+def extract_file_name(response_headers):
+    """
+    Tries to extract the filename returned from the response of the request.
+    """
 
-def download():
+    try:
+        file_name = re.search('=.*xls', response_headers)
+        file_name = file_name.group().replace('=', '')
+    except Exception:
+        file_name = "dados.xls"
+
+    return file_name
+
+def extract(month_value, year_value, information, write_to_disk=False):
+    """
+    Returns a dataframe with the information from the website.
+    If write_to_disk is True, then a xls file is created on disk.
+    """
+    print("Extracting")
     session = requests.session()
 
     url = "http://www.ssp.sp.gov.br/transparenciassp/"
 
     response = session.post(url, headers=headers)
-    viewstate, eventvalidation = get_viewstate(response.text)
+    viewstate, eventvalidation = get_viewstate_eventvalidation(response.text)
 
-    params = [
-        ['ctl00$cphBody$btnRouboCelular'],
-        ['ctl00$cphBody$lkAno17', True, False],
-        ['ctl00$cphBody$lkMes10', True, False],
-        ['ctl00$cphBody$ExportarBOLink', True, True, 0]
+    parameters_list = [
+        [information],
+        [month_value, True, False],
+        [year_value, True, False],
     ]
-    for i in range(len(params) - 1):
-        response = get_html(session, viewstate, eventvalidation, *params[i])
+    for parameters in parameters_list:
+        response = get_response(session, viewstate, eventvalidation, *parameters)
         html = response.text
-        viewstate, eventvalidation = get_viewstate(html)
-    response = get_html(session, viewstate, eventvalidation, *params[-1])
-    try:
-        file_name = re.search('=.*xls', response.headers['content-disposition'])
-        file_name = file_name.group().replace('=', '')
-    except Exception:
-        file_name = "dados.xls"
+        viewstate, eventvalidation = get_viewstate_eventvalidation(html)
+
+    response = get_response(session, 
+                        viewstate,
+                        eventvalidation, 
+                        'ctl00$cphBody$ExportarBOLink',
+                        True,
+                        True,
+                        0)
+    file_name = extract_file_name(response.headers['content-disposition'])
 
     ssp_data = response.text.split('\n')
     corrected_ssp_data = []
@@ -83,7 +108,49 @@ def download():
         dado_corrigido = re.split('\t{1}', dado)
         corrected_ssp_data.append(dado_corrigido)
 
-    header = corrected_ssp_data[0]
-    corrected_ssp_data = corrected_ssp_data[1:]
+    if write_to_disk:
+        header = corrected_ssp_data[0]
+        corrected_ssp_data = corrected_ssp_data[1:]
+        df = pd.DataFrame(corrected_ssp_data)
+        df.to_excel(file_name, index=False, encoding='utf-8', header=header)
+
     df = pd.DataFrame(corrected_ssp_data)
-    df.to_excel(file_name, index=False, encoding='utf-8', header=header)
+    return df
+
+def run(write_to_disk=False):
+
+    """
+    Interactive optin to run the scraper.
+    Choose an option, a month and a year to download the corrected information.
+    """
+    print("Opções:")
+    print("1 - Homicídio Doloso")
+    print("2 - Latrocínio")
+    print("3 - Lesão Corporal Seguida de Morte")
+    print("4 - Morte Decorrente de Oposição À Intervenção Policial")
+    print("5 - Morte Suspeita")
+    print("6 - Furto de Veículo")
+    print("7 - Roubo de Veículo")
+    print("8 - Furto de Celular")
+    print("9 - Roubo de Celular")
+    option = int(input("Escolha a opção: "))
+    year = str(input("Informe o ano  ( 2003 - 2018 ): "))
+    year = year[-2:]
+    year_value = "ctl00$cphBody$lkAno{}".format(year)
+    month = str(input("Informe o mês ( 1 - 12 ): "))
+    month_value = "ctl00$cphBody$lkMes{}".format(month)
+
+    informations = {
+        1:"ctl00$cphBody$btnHomicicio",
+        2:"ctl00$cphBody$btnLatrocinio",
+        3:"ctl00$cphBody$btnLesaoMorte",
+        4:"ctl00$cphBody$btnMortePolicial",
+        5:"ctl00$cphBody$btnMorteSuspeita",
+        6:"ctl00$cphBody$btnFurtoVeiculo",
+        7:"ctl00$cphBody$btnRouboVeiculo",
+        8:"ctl00$cphBody$btnFurtoCelular",
+        9:"ctl00$cphBody$btnRouboCelular",
+    }
+
+    information = informations[option]
+    return extract(month_value, year_value, information, write_to_disk)
